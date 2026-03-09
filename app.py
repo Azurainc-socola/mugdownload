@@ -10,7 +10,7 @@ import tempfile
 
 # --- Setup UI ---
 st.set_page_config(page_title="Azura Vibe Downloader Web", layout="centered")
-st.title("🚀 Azura Vibe Downloader (Web Version)")
+st.title("🚀 Azura Mug Downloader Label Design ")
 
 # Quản lý Cookie bằng Session State để không bị mất khi load lại trang
 if "cookie" not in st.session_state:
@@ -198,4 +198,5 @@ if st.button("🚀 CHẠY QUY TRÌNH QUÉT & TẢI", type="primary"):
         except Exception as e:
             add_log(f"Lỗi hệ thống: {e}")
             st.error("Quy trình bị lỗi, vui lòng kiểm tra Log.")
+
 
