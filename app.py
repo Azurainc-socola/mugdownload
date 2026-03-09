@@ -53,7 +53,7 @@ else:
 
 with st.expander("⚙️ 2. Cấu hình quét", expanded=True):
     date_start = st.text_input("Từ ngày (YYYY-MM-DD)", value=datetime.now().strftime("%Y-%m-%d"))
-    target_ids_input = st.text_input("Product IDs (ngăn cách bằng dấu phẩy)", value="286, 326, 320")
+    target_ids_input = st.text_input("Product IDs (ngăn cách bằng dấu phẩy)", value="326,322,320")
 
 # --- Main Pipeline ---
 if st.button("🚀 CHẠY QUY TRÌNH QUÉT & TẢI", type="primary"):
@@ -198,3 +198,4 @@ if st.button("🚀 CHẠY QUY TRÌNH QUÉT & TẢI", type="primary"):
         except Exception as e:
             add_log(f"Lỗi hệ thống: {e}")
             st.error("Quy trình bị lỗi, vui lòng kiểm tra Log.")
+
