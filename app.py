@@ -1,114 +1,105 @@
-import tkinter as tk
-from tkinter import filedialog, messagebox, scrolledtext
+import streamlit as st
 import requests
+import re
 from PIL import Image
 from io import BytesIO
-import threading
-import re
 from datetime import datetime
 import os
+import zipfile
+import tempfile
 
-class AzuraVibeDownloaderV20:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Azura Vibe - V20 (Real ProductName & Detailed Log)")
-        self.root.geometry("750x900")
+# --- Setup UI ---
+st.set_page_config(page_title="Azura Vibe Downloader Web", layout="centered")
+st.title("🚀 Azura Vibe Downloader (Web Version)")
 
-        # --- 1. Login ---
-        login_frame = tk.LabelFrame(root, text=" 1. Login & Cookie ", font=("Arial", 10, "bold"), fg="#D32F2F")
-        login_frame.pack(fill="x", padx=10, pady=5, ipady=5)
-        self.entry_user = tk.Entry(login_frame, width=15); self.entry_user.insert(0, "quynh.luong")
-        self.entry_pass = tk.Entry(login_frame, width=15, show="*")
-        tk.Label(login_frame, text="U:").grid(row=0, column=0); self.entry_user.grid(row=0, column=1)
-        tk.Label(login_frame, text="P:").grid(row=0, column=2); self.entry_pass.grid(row=0, column=3)
-        tk.Button(login_frame, text="Lấy Cookie", command=self.thread_get_cookie, bg="#FF9800").grid(row=0, column=4, padx=10)
-        self.entry_cookie = tk.Text(root, height=2); self.entry_cookie.pack(fill="x", padx=10)
+# Quản lý Cookie bằng Session State để không bị mất khi load lại trang
+if "cookie" not in st.session_state:
+    st.session_state.cookie = ""
 
-        # --- 2. Filter Config ---
-        filter_frame = tk.LabelFrame(root, text=" 2. Bộ lọc (Ngày & SP) ", font=("Arial", 10, "bold"))
-        filter_frame.pack(fill="x", padx=10, pady=5, ipady=5)
+def sanitize(name):
+    """Làm sạch tên file để tránh lỗi hệ điều hành"""
+    if not name: return "Unknown"
+    return re.sub(r'[\\/*?:"<>|#]', "", str(name)).strip().replace(" ", "_")
+
+# --- UI Components ---
+with st.expander("🔑 1. Đăng nhập hệ thống", expanded=True):
+    col1, col2 = st.columns(2)
+    user = col1.text_input("Username", value="quynh.luong")
+    pwd = col2.text_input("Password", type="password")
+    
+    if st.button("LẤY COOKIE"):
+        with st.spinner("Đang kết nối đến hệ thống..."):
+            try:
+                s = requests.Session()
+                r = s.get("https://portal.aluffm.com/Login", timeout=15)
+                token = re.search(r'name="__RequestVerificationToken"[^>]*value="([^"]+)"', r.text).group(1)
+                
+                payload = {"UserName": user, "Password": pwd, "__RequestVerificationToken": token, "RememberMe": "false"}
+                s.post("https://portal.aluffm.com/Login", data=payload, headers={"Referer": "https://portal.aluffm.com/Login"}, allow_redirects=False)
+                
+                ck_dict = s.cookies.get_dict()
+                if '.AspNetCore.Identity.Application' in ck_dict:
+                    st.session_state.cookie = "; ".join([f"{k}={v}" for k, v in ck_dict.items()])
+                    st.success("✅ Login thành công! Đã lấy Cookie.")
+                else:
+                    st.error("❌ Login thất bại: Sai tài khoản hoặc mật khẩu.")
+            except Exception as e:
+                st.error(f"Lỗi kết nối: {e}")
+
+if st.session_state.cookie:
+    st.info("🟢 Trạng thái: Cookie đã sẵn sàng!")
+else:
+    st.warning("🔴 Trạng thái: Chưa có Cookie. Vui lòng đăng nhập.")
+
+with st.expander("⚙️ 2. Cấu hình quét", expanded=True):
+    date_start = st.text_input("Từ ngày (YYYY-MM-DD)", value=datetime.now().strftime("%Y-%m-%d"))
+    target_ids_input = st.text_input("Product IDs (ngăn cách bằng dấu phẩy)", value="286, 326, 320")
+
+# --- Main Pipeline ---
+if st.button("🚀 CHẠY QUY TRÌNH QUÉT & TẢI", type="primary"):
+    if not st.session_state.cookie:
+        st.error("⚠️ Vui lòng LẤY COOKIE ở bước 1 trước khi chạy!")
+        st.stop()
         
-        tk.Label(filter_frame, text="Từ ngày (YYYY-MM-DD):").grid(row=0, column=0)
-        self.date_start = tk.Entry(filter_frame, width=12); self.date_start.grid(row=0, column=1)
-        self.date_start.insert(0, datetime.now().strftime("%Y-%m-%d"))
-
-        tk.Label(filter_frame, text="Product IDs:").grid(row=1, column=0)
-        self.entry_ids = tk.Entry(filter_frame); self.entry_ids.grid(row=1, column=1, sticky="we", columnspan=2)
-        self.entry_ids.insert(0, "286, 326, 320")
-
-        # --- 3. Output ---
-        tk.Label(root, text="3. Thư mục lưu Design:").pack(anchor="w", padx=10)
-        out_f = tk.Frame(root); out_f.pack(fill="x", padx=10)
-        self.entry_out = tk.Entry(out_f); self.entry_out.pack(side="left", fill="x", expand=True)
-        tk.Button(out_f, text="Chọn", command=self.browse_out).pack(side="right")
-
-        # --- 4. Run ---
-        self.btn_run = tk.Button(root, text="CHẠY: TẢI LABEL & DESIGN", bg="#E91E63", fg="white", font=("Arial", 12, "bold"), command=self.start_main_process)
-        self.btn_run.pack(fill="x", padx=10, pady=10, ipady=10)
-
-        self.log_text = scrolledtext.ScrolledText(root, height=18, state='disabled', bg="#f0f0f0")
-        self.log_text.pack(fill="both", expand=True, padx=10, pady=10)
-
-    def sanitize(self, name):
-        if not name: return "Unknown"
-        return re.sub(r'[\\/*?:"<>|#]', "", str(name)).strip().replace(" ", "_")
-
-    def browse_out(self):
-        f = filedialog.askdirectory()
-        if f: self.entry_out.delete(0, tk.END); self.entry_out.insert(0, f)
-
-    def log(self, msg):
-        def update():
-            self.log_text.config(state='normal')
-            self.log_text.insert(tk.END, f"[{datetime.now().strftime('%H:%M:%S')}] {msg}\n")
-            self.log_text.see(tk.END); self.log_text.config(state='disabled')
-        self.root.after(0, update)
-
-    def thread_get_cookie(self):
-        threading.Thread(target=self.auto_fetch_cookie, daemon=True).start()
-
-    def auto_fetch_cookie(self):
-        u, p = self.entry_user.get().strip(), self.entry_pass.get().strip()
-        try:
-            s = requests.Session()
-            r = s.get("https://portal.aluffm.com/Login")
-            token = re.search(r'name="__RequestVerificationToken"[^>]*value="([^"]+)"', r.text).group(1)
-            payload = {"UserName": u, "Password": p, "__RequestVerificationToken": token, "RememberMe": "false"}
-            s.post("https://portal.aluffm.com/Login", data=payload, headers={"Referer": "https://portal.aluffm.com/Login"}, allow_redirects=False)
-            ck_dict = s.cookies.get_dict()
-            if '.AspNetCore.Identity.Application' in ck_dict:
-                ck = "; ".join([f"{k}={v}" for k, v in ck_dict.items()])
-                self.root.after(0, lambda: (self.entry_cookie.delete("1.0", tk.END), self.entry_cookie.insert(tk.END, ck)))
-                self.log("Lấy Cookie mới thành công.")
-            else: self.log("Lỗi: Sai user/pass.")
-        except: self.log("Lỗi hệ thống khi Login.")
-
-    def start_main_process(self):
-        threading.Thread(target=self.main_pipeline, daemon=True).start()
-
-    def main_pipeline(self):
-        out_dir = self.entry_out.get().strip()
-        cookie = self.entry_cookie.get("1.0", tk.END).strip()
-        target_ids = [i.strip() for i in self.entry_ids.get().split(',') if i.strip()]
+    try:
+        start_dt = datetime.strptime(date_start.strip(), "%Y-%m-%d")
+    except:
+        st.error("⚠️ Ngày bắt đầu sai định dạng (YYYY-MM-DD)")
+        st.stop()
         
-        try: start_dt = datetime.strptime(self.date_start.get().strip(), "%Y-%m-%d")
-        except: self.log("Lỗi: Ngày bắt đầu sai định dạng (YYYY-MM-DD)"); return
+    target_ids = [i.strip() for i in target_ids_input.split(',') if i.strip()]
+    
+    # Khu vực in Log realtime
+    st.write("📝 **System Logs:**")
+    log_area = st.empty()
+    logs = []
+    
+    def add_log(msg):
+        logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+        log_area.code("\n".join(logs), language="text")
 
-        if not out_dir or not cookie: self.log("Lỗi: Thiếu Folder lưu hoặc Cookie!"); return
-
-        self.log("--- BẮT ĐẦU QUÉT ĐƠN ---")
+    add_log("--- BẮT ĐẦU QUY TRÌNH QUÉT ĐƠN ---")
+    
+    # Tạo thư mục tạm trên Server
+    with tempfile.TemporaryDirectory() as temp_dir:
         design_queue, label_urls, seen_labels = [], [], set()
         page = 1
-
+        
         try:
+            # 1. FETCH API & BINDING
             while True:
                 res = requests.get("https://portal.aluffm.com/OnBehalfOrder/List", 
-                                 headers={'Cookie': cookie, 'X-Requested-With': 'XMLHttpRequest'}, 
+                                 headers={'Cookie': st.session_state.cookie, 'X-Requested-With': 'XMLHttpRequest'}, 
                                  params={"pageSize": 50, "pageNumber": page}, timeout=20)
-                if res.status_code != 200: break
+                if res.status_code != 200: 
+                    add_log(f"Lỗi HTTP {res.status_code}")
+                    break
                 
                 try: rows = res.json().get("rows", [])
-                except: break
+                except: 
+                    add_log("Lỗi: API không trả về JSON hợp lệ.")
+                    break
+                    
                 if not rows: break
 
                 stop_page = False
@@ -123,7 +114,7 @@ class AzuraVibeDownloaderV20:
 
                     items = o.get('orderProductDesigns') or []
                     l_url = o.get('partnerLabelUrl')
-                    c_order = self.sanitize(o.get('customerOrder') or "")
+                    c_order = sanitize(o.get('customerOrder') or "")
                     
                     has_target = False
                     temp_designs = []
@@ -131,10 +122,8 @@ class AzuraVibeDownloaderV20:
                         if str(p.get('productId')) in target_ids:
                             has_target = True
                             oid = str(p.get('orderId') or o.get('id') or "NoID")
-                            
-                            # CẬP NHẬT QUAN TRỌNG: Quét sâu để lấy tên sản phẩm
                             raw_p_name = p.get('productName') or (p.get('product') or {}).get('name') or "Product"
-                            p_name = self.sanitize(raw_p_name)
+                            p_name = sanitize(raw_p_name)
                             
                             d_url = (p.get('design') or {}).get('previewUrl') or p.get('previewUrl')
                             
@@ -147,48 +136,65 @@ class AzuraVibeDownloaderV20:
                             seen_labels.add(l_url); label_urls.append(l_url)
                         design_queue.extend(temp_designs)
 
-                self.log(f"Đã quét trang {page}...")
+                add_log(f"Đã quét trang {page}...")
                 if stop_page: break
                 page += 1
 
-            self.log(f"Tổng hợp: Cần tải {len(label_urls)} Label & {len(design_queue)} Design.")
-            if label_urls: self.download_pdf_labels(label_urls)
-            if design_queue: self.download_designs(design_queue, out_dir)
+            add_log(f"Tổng hợp: Cần tải {len(label_urls)} Label & {len(design_queue)} Design.")
+            
+            # 2. DOWNLOAD LABELS
+            if label_urls:
+                add_log("Đang gộp file PDF nhãn...")
+                imgs = []
+                for u in label_urls:
+                    try:
+                        r = requests.get(u, timeout=15)
+                        if r.status_code == 200: imgs.append(Image.open(BytesIO(r.content)).convert('RGB'))
+                    except: pass
+                if imgs:
+                    pdf_path = os.path.join(temp_dir, f"Labels_{datetime.now().strftime('%H%M')}.pdf")
+                    imgs[0].save(pdf_path, "PDF", save_all=True, append_images=imgs[1:])
+                    add_log(f"✅ Đã lưu PDF: {os.path.basename(pdf_path)}")
 
-        except Exception as e: self.log(f"Lỗi hệ thống: {e}")
-        self.log("--- HOÀN TẤT QUY TRÌNH ---")
+            # 3. DOWNLOAD DESIGNS
+            if design_queue:
+                add_log(f"Bắt đầu tải {len(design_queue)} Design...")
+                count = 0
+                for u, f in design_queue:
+                    try:
+                        r = requests.get(u, stream=True, timeout=25)
+                        if r.status_code == 200:
+                            with open(os.path.join(temp_dir, f), 'wb') as out:
+                                for chunk in r.iter_content(8192): out.write(chunk)
+                            count += 1
+                            add_log(f" └─ Đã lưu: {f}")
+                    except Exception as e:
+                        add_log(f" └─ Lỗi tải {f}: {e}")
+                add_log(f"✅ Hoàn tất tải {count}/{len(design_queue)} Design.")
 
-    def download_pdf_labels(self, urls):
-        self.log("Đang gộp file PDF nhãn...")
-        imgs = []
-        for u in urls:
-            try:
-                r = requests.get(u, timeout=15)
-                if r.status_code == 200: imgs.append(Image.open(BytesIO(r.content)).convert('RGB'))
-            except: pass
-        if imgs:
-            path = filedialog.asksaveasfilename(defaultextension=".pdf", initialfile=f"Labels_{datetime.now().strftime('%H%M')}.pdf")
-            if path: imgs[0].save(path, "PDF", save_all=True, append_images=imgs[1:])
-            self.log("✅ Lưu PDF Label thành công.")
+            # 4. TẠO FILE ZIP ĐỂ DOWNLOAD
+            if len(os.listdir(temp_dir)) > 0:
+                add_log("Đang nén file ZIP...")
+                zip_buffer = BytesIO()
+                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                    for root, _, files in os.walk(temp_dir):
+                        for file in files:
+                            file_path = os.path.join(root, file)
+                            zip_file.write(file_path, arcname=file)
+                add_log("🎉 HOÀN TẤT TOÀN BỘ QUY TRÌNH!")
+                
+                st.success("Tải dữ liệu thành công! Vui lòng bấm nút bên dưới để tải file ZIP về máy.")
+                st.download_button(
+                    label="📥 TẢI XUỐNG KẾT QUẢ (.ZIP)",
+                    data=zip_buffer.getvalue(),
+                    file_name=f"Azura_Designs_{datetime.now().strftime('%m%d_%H%M')}.zip",
+                    mime="application/zip",
+                    type="primary"
+                )
+            else:
+                add_log("Không có file nào được tải xuống.")
+                st.warning("Không tìm thấy dữ liệu phù hợp với bộ lọc.")
 
-    def download_designs(self, queue, out_dir):
-        if not os.path.exists(out_dir): os.makedirs(out_dir, exist_ok=True)
-        count = 0
-        self.log(f"Bắt đầu tải {len(queue)} Design...")
-        for u, f in queue:
-            try:
-                r = requests.get(u, stream=True, timeout=25)
-                if r.status_code == 200:
-                    with open(os.path.join(out_dir, f), 'wb') as out:
-                        for chunk in r.iter_content(8192): out.write(chunk)
-                    count += 1
-                    # CẬP NHẬT LOG: Hiển thị tên file vừa tải
-                    self.log(f" └─ Đã lưu: {f}")
-                else:
-                    self.log(f" └─ [Lỗi HTTP {r.status_code}] Không thể tải: {f}")
-            except Exception as e: 
-                self.log(f" └─ [Lỗi] {f} : {e}")
-        self.log(f"✅ Hoàn tất tải {count}/{len(queue)} Design.")
-
-if __name__ == "__main__":
-    root = tk.Tk(); app = AzuraVibeDownloaderV20(root); root.mainloop()
+        except Exception as e:
+            add_log(f"Lỗi hệ thống: {e}")
+            st.error("Quy trình bị lỗi, vui lòng kiểm tra Log.")
