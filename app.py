@@ -1,105 +1,145 @@
 import streamlit as st
-import requests
-import re
-from PIL import Image
-from io import BytesIO
-from datetime import datetime
 import os
-import zipfile
-import tempfile
+import re
+import requests
+from datetime import datetime
+from io import BytesIO
+from PIL import Image
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
-# --- Setup UI ---
-st.set_page_config(page_title="Azura Vibe Downloader Web", layout="centered")
-st.title("🚀 Azura Mug Downloader Label Design ")
+# Google Auth
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+import gspread
 
-# Quản lý Cookie bằng Session State để không bị mất khi load lại trang
-if "cookie" not in st.session_state:
-    st.session_state.cookie = ""
+# ==========================================
+# CẤU HÌNH GIAO DIỆN STREAMLIT
+# ==========================================
+st.set_page_config(page_title="Azura Vibe Downloader", page_icon="🚀", layout="wide")
+st.title("🚀 AZURA VIBE DOWNLOADER & SHEET UPDATER")
 
+# Sidebar cho Input
+with st.sidebar:
+    st.header("⚙️ Cấu Hình Chung")
+    Username = st.text_input("Portal Username", value="quynh.luong")
+    Password = st.text_input("Portal Password", type="password", value="Azura@2803")
+    
+    # [TÍNH NĂNG MỚI] - Xử lý khoảng thời gian
+    Ngay_bat_dau = st.date_input("📅 Ngày bắt đầu (Bắt buộc)", value=datetime.now().date())
+    
+    Gioi_Han_Ket_Thuc = st.checkbox("Chọn ngày kết thúc", value=False)
+    if Gioi_Han_Ket_Thuc:
+        Ngay_ket_thuc = st.date_input("📅 Ngày kết thúc")
+    else:
+        # Nếu không chọn, ngày kết thúc tự động là ngày hiện tại
+        Ngay_ket_thuc = datetime.now().date()
+        st.info("ℹ️ Đang mặc định quét đến ngày hiện tại.")
+
+    Product_IDs = st.text_input("Product IDs (cách nhau dấu phẩy)", value="326, 322, 320")
+    Ten_Thu_Muc_Moi = st.text_input("Tên Thư Mục Mới", value=f"{datetime.now().strftime('%d_%B').lower()}")
+
+    st.header("🛠️ Chọn Tính Năng")
+    Tao_PDF_Label = st.checkbox("Tạo PDF Label", value=True)
+    Tai_Anh_Design = st.checkbox("Tải Ảnh Design lên Drive", value=False)
+    Ghi_Google_Sheet = st.checkbox("Ghi dữ liệu Google Sheet", value=False)
+    
+    st.header("📧 Cấu Hình Email")
+    Gui_Email = st.checkbox("Gửi Email Thông Báo", value=True)
+    Email_Nhan_To = st.text_input("Email Nhận (TO)", value="tuongvythan.ng@gmail.com")
+    Email_Nhan_CC = st.text_input("Email Nhận (CC)", value="namhoang243@gmail.com, mibi9500@gmail.com")
+
+    run_btn = st.button("▶️ CHẠY TIẾN TRÌNH", use_container_width=True, type="primary")
+
+# Hằng số (Cố định của dự án)
+PARENT_FOLDER_ID = "1stqTuzijEkaHTQd_PCXThz_tDVDm75CX"
+GOOGLE_SHEET_ID = "1WIV4otW8EvoSme7WwC9PauHc6FV8C6PxegNxt549kAk"
+
+# Hàm làm sạch tên file
 def sanitize(name):
-    """Làm sạch tên file để tránh lỗi hệ điều hành"""
     if not name: return "Unknown"
     return re.sub(r'[\\/*?:"<>|#]', "", str(name)).strip().replace(" ", "_")
 
-# --- UI Components ---
-with st.expander("🔑 1. Đăng nhập hệ thống", expanded=True):
-    col1, col2 = st.columns(2)
-    user = col1.text_input("Username", value="quynh.luong")
-    pwd = col2.text_input("Password", type="password")
-    
-    if st.button("LẤY COOKIE"):
-        with st.spinner("Đang kết nối đến hệ thống..."):
-            try:
-                s = requests.Session()
-                r = s.get("https://portal.aluffm.com/Login", timeout=15)
-                token = re.search(r'name="__RequestVerificationToken"[^>]*value="([^"]+)"', r.text).group(1)
-                
-                payload = {"UserName": user, "Password": pwd, "__RequestVerificationToken": token, "RememberMe": "false"}
-                s.post("https://portal.aluffm.com/Login", data=payload, headers={"Referer": "https://portal.aluffm.com/Login"}, allow_redirects=False)
-                
-                ck_dict = s.cookies.get_dict()
-                if '.AspNetCore.Identity.Application' in ck_dict:
-                    st.session_state.cookie = "; ".join([f"{k}={v}" for k, v in ck_dict.items()])
-                    st.success("✅ Login thành công! Đã lấy Cookie.")
-                else:
-                    st.error("❌ Login thất bại: Sai tài khoản hoặc mật khẩu.")
-            except Exception as e:
-                st.error(f"Lỗi kết nối: {e}")
-
-if st.session_state.cookie:
-    st.info("🟢 Trạng thái: Cookie đã sẵn sàng!")
-else:
-    st.warning("🔴 Trạng thái: Chưa có Cookie. Vui lòng đăng nhập.")
-
-with st.expander("⚙️ 2. Cấu hình quét", expanded=True):
-    date_start = st.text_input("Từ ngày (YYYY-MM-DD) tính theo creat at day ", value=datetime.now().strftime("%Y-%m-%d"))
-    target_ids_input = st.text_input("Product IDs (ngăn cách bằng dấu phẩy)", value="326,322,320")
-
-# --- Main Pipeline ---
-if st.button("🚀 CHẠY QUY TRÌNH QUÉT & TẢI", type="primary"):
-    if not st.session_state.cookie:
-        st.error("⚠️ Vui lòng LẤY COOKIE ở bước 1 trước khi chạy!")
+# ==========================================
+# LUỒNG XỬ LÝ CHÍNH
+# ==========================================
+if run_btn:
+    # Validate logic ngày
+    if Ngay_ket_thuc < Ngay_bat_dau:
+        st.sidebar.error("❌ Lỗi: Ngày kết thúc không được nhỏ hơn ngày bắt đầu!")
         st.stop()
-        
-    try:
-        start_dt = datetime.strptime(date_start.strip(), "%Y-%m-%d")
-    except:
-        st.error("⚠️ Ngày bắt đầu sai định dạng (YYYY-MM-DD)")
-        st.stop()
-        
-    target_ids = [i.strip() for i in target_ids_input.split(',') if i.strip()]
-    
-    # Khu vực in Log realtime
-    st.write("📝 **System Logs:**")
-    log_area = st.empty()
-    logs = []
-    
-    def add_log(msg):
-        logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
-        log_area.code("\n".join(logs), language="text")
 
-    add_log("--- BẮT ĐẦU QUY TRÌNH QUÉT ĐƠN ---")
+    log_container = st.container()
     
-    # Tạo thư mục tạm trên Server
-    with tempfile.TemporaryDirectory() as temp_dir:
-        design_queue, label_urls, seen_labels = [], [], set()
-        page = 1
-        
+    with st.status("🚀 Đang khởi chạy hệ thống...", expanded=True) as status:
         try:
-            # 1. FETCH API & BINDING
+            # 1. XÁC THỰC GOOGLE VỚI SERVICE ACCOUNT
+            st.write("🔄 Đang xác thực Google Service Account...")
+            scopes = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
+            creds_dict = st.secrets["gcp_service_account"]
+            creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+            
+            drive_service = build('drive', 'v3', credentials=creds)
+            gc = gspread.authorize(creds) if Ghi_Google_Sheet else None
+            st.write("✅ Xác thực Google thành công!")
+
+            # Hàm tạo Drive Folder
+            def create_drive_folder(folder_name, parent_id):
+                file_metadata = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder', 'parents': [parent_id]}
+                folder = drive_service.files().create(body=file_metadata, fields='id').execute()
+                return folder.get('id')
+
+            # Hàm Upload File
+            def upload_to_drive(local_file_path, file_name, folder_id, mime_type):
+                file_metadata = {'name': file_name, 'parents': [folder_id]}
+                media = MediaFileUpload(local_file_path, mimetype=mime_type, resumable=True)
+                drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+
+            st.write(f"📁 Đang tạo/chỉ định thư mục '{Ten_Thu_Muc_Moi}'...")
+            TARGET_FOLDER_ID = create_drive_folder(Ten_Thu_Muc_Moi, PARENT_FOLDER_ID)
+            st.write(f"✅ Đã tạo thư mục con (ID: {TARGET_FOLDER_ID})")
+
+            # 2. LOGIN PORTAL
+            st.write("🌐 Đang đăng nhập hệ thống Portal...")
+            session = requests.Session()
+            cookie_str = ""
+            r1 = session.get("https://portal.aluffm.com/Login", timeout=15)
+            token = re.search(r'name="__RequestVerificationToken"[^>]*value="([^"]+)"', r1.text).group(1)
+            payload = {"UserName": Username, "Password": Password, "__RequestVerificationToken": token, "RememberMe": "false"}
+            session.post("https://portal.aluffm.com/Login", data=payload, headers={"Referer": "https://portal.aluffm.com/Login"}, allow_redirects=False)
+
+            ck_dict = session.cookies.get_dict()
+            if '.AspNetCore.Identity.Application' in ck_dict:
+                cookie_str = "; ".join([f"{k}={v}" for k, v in ck_dict.items()])
+                st.write("✅ Lấy Cookie thành công!")
+            else:
+                st.error("❌ Đăng nhập thất bại: Sai tài khoản hoặc mật khẩu.")
+                st.stop()
+
+            # 3. QUÉT ĐƠN HÀNG [CẬP NHẬT LOGIC NGÀY THÁNG]
+            # Set time cover trọn vẹn từ 00:00:00 ngày bắt đầu đến 23:59:59 ngày kết thúc
+            start_dt = datetime.combine(Ngay_bat_dau, datetime.min.time())
+            end_dt = datetime.combine(Ngay_ket_thuc, datetime.max.time())
+            
+            str_date_range = f"{Ngay_bat_dau.strftime('%d/%m/%Y')} - {Ngay_ket_thuc.strftime('%d/%m/%Y')}"
+            st.write(f"🔍 Đang quét đơn hàng từ ngày: {str_date_range}...")
+            
+            target_ids = [i.strip() for i in Product_IDs.split(',') if i.strip()]
+            
+            tong_item_vat_ly = 0
+            label_urls = []
+            design_queue = []
+            seen_labels = set()
+            page = 1
+
             while True:
-                res = requests.get("https://portal.aluffm.com/OnBehalfOrder/List", 
-                                 headers={'Cookie': st.session_state.cookie, 'X-Requested-With': 'XMLHttpRequest'}, 
-                                 params={"pageSize": 50, "pageNumber": page}, timeout=20)
-                if res.status_code != 200: 
-                    add_log(f"Lỗi HTTP {res.status_code}")
-                    break
+                headers = {'Cookie': cookie_str, 'X-Requested-With': 'XMLHttpRequest'}
+                res = requests.get("https://portal.aluffm.com/OnBehalfOrder/List", headers=headers, params={"pageSize": 50, "pageNumber": page}, timeout=20)
+                if res.status_code != 200: break
                 
-                try: rows = res.json().get("rows", [])
-                except: 
-                    add_log("Lỗi: API không trả về JSON hợp lệ.")
-                    break
-                    
+                rows = res.json().get("rows", [])
                 if not rows: break
 
                 stop_page = False
@@ -109,95 +149,147 @@ if st.button("🚀 CHẠY QUY TRÌNH QUÉT & TẢI", type="primary"):
                     try: o_dt = datetime.strptime(o_date_str, "%Y-%m-%d")
                     except: o_dt = None
 
-                    if o_dt and o_dt < start_dt:
-                        stop_page = True; break
+                    if o_dt:
+                        # Vượt quá ngày kết thúc -> đơn mới hơn khoảng cần tìm -> Bỏ qua
+                        if o_dt > end_dt:
+                            continue
+                        
+                        # Cũ hơn ngày bắt đầu -> đã quét xong các đơn cần thiết -> Dừng hẳn
+                        if o_dt < start_dt:
+                            stop_page = True
+                            break
 
+                    # Nếu lọt vào đây tức là đơn hàng nằm trong khoảng Start_dt -> End_dt
                     items = o.get('orderProductDesigns') or []
                     l_url = o.get('partnerLabelUrl')
                     c_order = sanitize(o.get('customerOrder') or "")
-                    
+                    order_qty = o.get('quantity') or 1
+
                     has_target = False
                     temp_designs = []
                     for idx, p in enumerate(items):
                         if str(p.get('productId')) in target_ids:
                             has_target = True
                             oid = str(p.get('orderId') or o.get('id') or "NoID")
-                            raw_p_name = p.get('productName') or (p.get('product') or {}).get('name') or "Product"
-                            p_name = sanitize(raw_p_name)
-                            
+                            p_name = sanitize(p.get('productName') or (p.get('product') or {}).get('name') or "Product")
+                            product_name_idx = f"{p_name}_{idx+1}"
+                            item_qty = p.get('quantity') or order_qty
                             d_url = (p.get('design') or {}).get('previewUrl') or p.get('previewUrl')
                             
                             if d_url:
-                                fname = f"{oid}_{c_order}_{p_name}_{idx+1}.png"
-                                temp_designs.append((d_url, fname))
+                                fname = f"{oid}_{c_order}_{product_name_idx}-{item_qty}item.png"
+                                temp_designs.append({"url": d_url, "fname": fname, "oid": oid, "c_order": c_order, "product_name_idx": product_name_idx, "qty": item_qty})
 
                     if has_target and l_url:
                         if l_url not in seen_labels:
                             seen_labels.add(l_url); label_urls.append(l_url)
                         design_queue.extend(temp_designs)
 
-                add_log(f"Đã quét trang {page}...")
+                st.write(f" └─ Đã quét xong trang {page}...")
                 if stop_page: break
                 page += 1
 
-            add_log(f"Tổng hợp: Cần tải {len(label_urls)} Label & {len(design_queue)} Design.")
-            
-            # 2. DOWNLOAD LABELS
-            if label_urls:
-                add_log("Đang gộp file PDF nhãn...")
+            tong_item_vat_ly = sum(item["qty"] for item in design_queue)
+            st.success(f"📊 Tìm thấy: {len(label_urls)} Labels | {len(design_queue)} Designs | Tổng Item: {tong_item_vat_ly}")
+
+            # 4. XỬ LÝ FILE PDF & DRIVE
+            if Tao_PDF_Label and label_urls:
+                st.write("📦 Đang xử lý gộp file PDF Labels...")
                 imgs = []
                 for u in label_urls:
                     try:
                         r = requests.get(u, timeout=15)
                         if r.status_code == 200: imgs.append(Image.open(BytesIO(r.content)).convert('RGB'))
                     except: pass
+
                 if imgs:
-                    pdf_path = os.path.join(temp_dir, f"Labels_{datetime.now().strftime('%H%M')}.pdf")
-                    imgs[0].save(pdf_path, "PDF", save_all=True, append_images=imgs[1:])
-                    add_log(f"✅ Đã lưu PDF: {os.path.basename(pdf_path)}")
+                    pdf_filename = f"Labels_{datetime.now().strftime('%m%d_%H%M')}.pdf"
+                    imgs[0].save(pdf_filename, "PDF", save_all=True, append_images=imgs[1:])
+                    upload_to_drive(pdf_filename, pdf_filename, TARGET_FOLDER_ID, 'application/pdf')
+                    os.remove(pdf_filename)
+                    st.write("✅ Đã tải PDF lên Drive thành công!")
+            elif Tao_PDF_Label and not label_urls:
+                st.warning("⚠️ Không tìm thấy Label nào trong khoảng thời gian này.")
 
-            # 3. DOWNLOAD DESIGNS
+            # 5. XỬ LÝ DESIGN & SHEET
+            sheet_rows_to_append = []
             if design_queue:
-                add_log(f"Bắt đầu tải {len(design_queue)} Design...")
                 count = 0
-                for u, f in design_queue:
-                    try:
-                        r = requests.get(u, stream=True, timeout=25)
-                        if r.status_code == 200:
-                            with open(os.path.join(temp_dir, f), 'wb') as out:
-                                for chunk in r.iter_content(8192): out.write(chunk)
-                            count += 1
-                            add_log(f" └─ Đã lưu: {f}")
-                    except Exception as e:
-                        add_log(f" └─ Lỗi tải {f}: {e}")
-                add_log(f"✅ Hoàn tất tải {count}/{len(design_queue)} Design.")
+                for item in design_queue:
+                    f_name = item["fname"]
+                    upload_success = False
 
-            # 4. TẠO FILE ZIP ĐỂ DOWNLOAD
-            if len(os.listdir(temp_dir)) > 0:
-                add_log("Đang nén file ZIP...")
-                zip_buffer = BytesIO()
-                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                    for root, _, files in os.walk(temp_dir):
-                        for file in files:
-                            file_path = os.path.join(root, file)
-                            zip_file.write(file_path, arcname=file)
-                add_log("🎉 HOÀN TẤT TOÀN BỘ QUY TRÌNH!")
+                    if Tai_Anh_Design:
+                        try:
+                            r = requests.get(item["url"], stream=True, timeout=25)
+                            if r.status_code == 200:
+                                with open(f_name, 'wb') as out_f:
+                                    for chunk in r.iter_content(8192): out_f.write(chunk)
+                                upload_to_drive(f_name, f_name, TARGET_FOLDER_ID, 'image/png')
+                                os.remove(f_name)
+                                count += 1
+                                upload_success = True
+                        except Exception as e:
+                            st.error(f"❌ Lỗi tải ảnh {f_name}: {e}")
+                    else:
+                        upload_success = True
+
+                    if Ghi_Google_Sheet and upload_success:
+                        portal_link = f"https://portal.aluffm.com/OnBehalfOrder?searchText={item['c_order']}"
+                        sheet_rows_to_append.append([Ten_Thu_Muc_Moi, item["oid"], item["c_order"], item["url"], item["product_name_idx"], item["qty"], portal_link])
+
+                if Tai_Anh_Design:
+                    st.write(f"🎉 Đã tải lên Drive: {count}/{len(design_queue)} Designs.")
+
+            if Ghi_Google_Sheet and sheet_rows_to_append:
+                st.write("📝 Đang ghi dữ liệu vào Google Sheet...")
+                sh = gc.open_by_key(GOOGLE_SHEET_ID)
+                worksheet = sh.get_worksheet(0)
+                worksheet.append_rows(sheet_rows_to_append)
+                st.write("✅ Đã ghi dữ liệu Sheet thành công!")
+
+            # 6. GỬI EMAIL
+            if Gui_Email:
+                st.write("📧 Đang gửi email báo cáo...")
+                Email_Nguoi_Gui = st.secrets["email_config"]["sender_email"]
+                Mat_Khau_Ung_Dung = st.secrets["email_config"]["app_password"]
                 
-                st.success("Tải dữ liệu thành công! Vui lòng bấm nút bên dưới để tải file ZIP về máy.")
-                st.download_button(
-                    label="📥 TẢI XUỐNG KẾT QUẢ (.ZIP)",
-                    data=zip_buffer.getvalue(),
-                    file_name=f"Azura_Designs_{datetime.now().strftime('%m%d_%H%M')}.zip",
-                    mime="application/zip",
-                    type="primary"
-                )
-            else:
-                add_log("Không có file nào được tải xuống.")
-                st.warning("Không tìm thấy dữ liệu phù hợp với bộ lọc.")
+                drive_link = f"https://drive.google.com/drive/folders/{TARGET_FOLDER_ID}" if TARGET_FOLDER_ID else "Không có link"
+                html_content = f"""
+                <html><body>
+                    <h2 style="color: #2E86C1;">🚀 BÁO CÁO TỰ ĐỘNG AZURA</h2>
+                    <p>Đã chạy tiến trình lấy dữ liệu trong khoảng thời gian:</p>
+                    <p>⏳ <b>Từ {Ngay_bat_dau.strftime('%d/%m/%Y')} đến {Ngay_ket_thuc.strftime('%d/%m/%Y')}</b>.</p>
+                    <ul>
+                        <li><b>Số lượng Đơn (Labels):</b> {len(label_urls)}</li>
+                        <li><b>Số lượng File Design:</b> {len(design_queue)}</li>
+                        <li><b style="color: #C0392B;">Tổng Item cần sản xuất:</b> {tong_item_vat_ly}</li>
+                    </ul>
+                    <p>👉 <b>Link Folder Drive lưu trữ:</b> <a href="{drive_link}">{Ten_Thu_Muc_Moi}</a></p>
+                    <hr>
+                    <p style="font-size: 11px; color: gray;">Email tự động tạo bởi VibeCoder Assistant.</p>
+                </body></html>
+                """
+                msg = MIMEMultipart()
+                msg['From'] = Email_Nguoi_Gui
+                msg['To'] = Email_Nhan_To
+                if Email_Nhan_CC.strip(): msg['Cc'] = Email_Nhan_CC
+                msg['Subject'] = f"[Azura Production] Batch {str_date_range} - Thư mục: {Ten_Thu_Muc_Moi}"
+                msg.attach(MIMEText(html_content, 'html'))
+
+                server = smtplib.SMTP('smtp.gmail.com', 587)
+                server.starttls()
+                server.login(Email_Nguoi_Gui, Mat_Khau_Ung_Dung.replace(" ", ""))
+                
+                all_recipients = [e.strip() for e in Email_Nhan_To.split(',') if e.strip()] + [e.strip() for e in Email_Nhan_CC.split(',') if e.strip()]
+                if all_recipients:
+                    server.sendmail(Email_Nguoi_Gui, all_recipients, msg.as_string())
+                server.quit()
+                st.write("✅ Đã gửi Email thành công!")
+
+            status.update(label="🎉 HOÀN TẤT QUY TRÌNH!", state="complete", expanded=False)
+            st.balloons()
 
         except Exception as e:
-            add_log(f"Lỗi hệ thống: {e}")
-            st.error("Quy trình bị lỗi, vui lòng kiểm tra Log.")
-
-
-
+            status.update(label="❌ Có lỗi xảy ra!", state="error", expanded=True)
+            st.error(str(e))
