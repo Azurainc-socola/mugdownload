@@ -2,7 +2,7 @@ import streamlit as st
 import os
 import re
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from PIL import Image
 import smtplib
@@ -16,6 +16,13 @@ from googleapiclient.http import MediaFileUpload
 import gspread
 
 # ==========================================
+# THIẾT LẬP MÚI GIỜ (HANOI GMT+7)
+# ==========================================
+VN_TZ = timezone(timedelta(hours=7))
+vntime_now = datetime.now(VN_TZ)
+today_vn = vntime_now.date()
+
+# ==========================================
 # CẤU HÌNH GIAO DIỆN STREAMLIT
 # ==========================================
 st.set_page_config(page_title="Azura Vibe Downloader", page_icon="🚀", layout="wide")
@@ -27,19 +34,17 @@ with st.sidebar:
     Username = st.text_input("Portal Username", value="quynh.luong")
     Password = st.text_input("Portal Password", type="password", value="Azura@2803")
     
-    # [TÍNH NĂNG MỚI] - Xử lý khoảng thời gian
-    Ngay_bat_dau = st.date_input("📅 Ngày bắt đầu (Bắt buộc)", value=datetime.now().date())
+    Ngay_bat_dau = st.date_input("📅 Ngày bắt đầu (Bắt buộc)", value=today_vn)
     
     Gioi_Han_Ket_Thuc = st.checkbox("Chọn ngày kết thúc", value=False)
     if Gioi_Han_Ket_Thuc:
-        Ngay_ket_thuc = st.date_input("📅 Ngày kết thúc")
+        Ngay_ket_thuc = st.date_input("📅 Ngày kết thúc", value=today_vn)
     else:
-        # Nếu không chọn, ngày kết thúc tự động là ngày hiện tại
-        Ngay_ket_thuc = datetime.now().date()
-        st.info("ℹ️ Đang mặc định quét đến ngày hiện tại.")
+        Ngay_ket_thuc = today_vn
+        st.info("ℹ️ Mặc định quét đến ngày hiện tại (GMT+7).")
 
     Product_IDs = st.text_input("Product IDs (cách nhau dấu phẩy)", value="326, 322, 320")
-    Ten_Thu_Muc_Moi = st.text_input("Tên Thư Mục Mới", value=f"{datetime.now().strftime('%d_%B').lower()}")
+    Ten_Thu_Muc_Moi = st.text_input("Tên Thư Mục Mới", value=f"{vntime_now.strftime('%d_%B').lower()}")
 
     st.header("🛠️ Chọn Tính Năng")
     Tao_PDF_Label = st.checkbox("Tạo PDF Label", value=True)
@@ -66,7 +71,6 @@ def sanitize(name):
 # LUỒNG XỬ LÝ CHÍNH
 # ==========================================
 if run_btn:
-    # Validate logic ngày
     if Ngay_ket_thuc < Ngay_bat_dau:
         st.sidebar.error("❌ Lỗi: Ngày kết thúc không được nhỏ hơn ngày bắt đầu!")
         st.stop()
@@ -118,8 +122,7 @@ if run_btn:
                 st.error("❌ Đăng nhập thất bại: Sai tài khoản hoặc mật khẩu.")
                 st.stop()
 
-            # 3. QUÉT ĐƠN HÀNG [CẬP NHẬT LOGIC NGÀY THÁNG]
-            # Set time cover trọn vẹn từ 00:00:00 ngày bắt đầu đến 23:59:59 ngày kết thúc
+            # 3. QUÉT ĐƠN HÀNG
             start_dt = datetime.combine(Ngay_bat_dau, datetime.min.time())
             end_dt = datetime.combine(Ngay_ket_thuc, datetime.max.time())
             
@@ -150,16 +153,11 @@ if run_btn:
                     except: o_dt = None
 
                     if o_dt:
-                        # Vượt quá ngày kết thúc -> đơn mới hơn khoảng cần tìm -> Bỏ qua
-                        if o_dt > end_dt:
-                            continue
-                        
-                        # Cũ hơn ngày bắt đầu -> đã quét xong các đơn cần thiết -> Dừng hẳn
+                        if o_dt > end_dt: continue
                         if o_dt < start_dt:
                             stop_page = True
                             break
 
-                    # Nếu lọt vào đây tức là đơn hàng nằm trong khoảng Start_dt -> End_dt
                     items = o.get('orderProductDesigns') or []
                     l_url = o.get('partnerLabelUrl')
                     c_order = sanitize(o.get('customerOrder') or "")
@@ -203,7 +201,7 @@ if run_btn:
                     except: pass
 
                 if imgs:
-                    pdf_filename = f"Labels_{datetime.now().strftime('%m%d_%H%M')}.pdf"
+                    pdf_filename = f"Labels_{vntime_now.strftime('%d%m_%H%M')}.pdf"
                     imgs[0].save(pdf_filename, "PDF", save_all=True, append_images=imgs[1:])
                     upload_to_drive(pdf_filename, pdf_filename, TARGET_FOLDER_ID, 'application/pdf')
                     os.remove(pdf_filename)
@@ -241,12 +239,25 @@ if run_btn:
                 if Tai_Anh_Design:
                     st.write(f"🎉 Đã tải lên Drive: {count}/{len(design_queue)} Designs.")
 
+            # Biến lưu trữ vị trí dòng để gửi Email
+            start_row = 0
+            end_row = 0
+            
             if Ghi_Google_Sheet and sheet_rows_to_append:
                 st.write("📝 Đang ghi dữ liệu vào Google Sheet...")
-                sh = gc.open_by_key(GOOGLE_SHEET_ID)
-                worksheet = sh.get_worksheet(0)
-                worksheet.append_rows(sheet_rows_to_append)
-                st.write("✅ Đã ghi dữ liệu Sheet thành công!")
+                try:
+                    sh = gc.open_by_key(GOOGLE_SHEET_ID)
+                    worksheet = sh.get_worksheet(0)
+                    
+                    # Đếm số dòng hiện tại (dựa vào cột A)
+                    current_rows = len(worksheet.col_values(1))
+                    start_row = current_rows + 1
+                    end_row = start_row + len(sheet_rows_to_append) - 1
+                    
+                    worksheet.append_rows(sheet_rows_to_append)
+                    st.write(f"✅ Đã ghi dữ liệu Sheet thành công (Từ dòng {start_row} đến {end_row})!")
+                except Exception as e:
+                    st.error(f"❌ Lỗi khi ghi Google Sheet: {e}")
 
             # 6. GỬI EMAIL
             if Gui_Email:
@@ -255,19 +266,37 @@ if run_btn:
                 Mat_Khau_Ung_Dung = st.secrets["email_config"]["app_password"]
                 
                 drive_link = f"https://drive.google.com/drive/folders/{TARGET_FOLDER_ID}" if TARGET_FOLDER_ID else "Không có link"
+                sheet_link = f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}/edit"
+                
+                # Báo cáo Sheet (Chỉ hiển thị nếu có ghi)
+                sheet_report_html = ""
+                if Ghi_Google_Sheet and start_row > 0:
+                    sheet_report_html = f"""
+                    <h3 style="border-bottom: 1px solid #ccc; padding-bottom: 5px;">📗 Cập nhật Google Sheet:</h3>
+                    <ul>
+                        <li><b>Dữ liệu mới:</b> Đã ghi từ dòng <b style="color: #E67E22;">{start_row}</b> đến dòng <b style="color: #E67E22;">{end_row}</b></li>
+                        <li>👉 <b>Mở File Quản Lý:</b> <a href="{sheet_link}" style="color: #27AE60; font-weight: bold;">Truy cập Google Sheet tại đây</a></li>
+                    </ul>
+                    """
+                
                 html_content = f"""
-                <html><body>
+                <html><body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
                     <h2 style="color: #2E86C1;">🚀 BÁO CÁO TỰ ĐỘNG AZURA</h2>
                     <p>Đã chạy tiến trình lấy dữ liệu trong khoảng thời gian:</p>
                     <p>⏳ <b>Từ {Ngay_bat_dau.strftime('%d/%m/%Y')} đến {Ngay_ket_thuc.strftime('%d/%m/%Y')}</b>.</p>
+                    
+                    <h3 style="border-bottom: 1px solid #ccc; padding-bottom: 5px;">📊 Thông số sản xuất:</h3>
                     <ul>
                         <li><b>Số lượng Đơn (Labels):</b> {len(label_urls)}</li>
                         <li><b>Số lượng File Design:</b> {len(design_queue)}</li>
                         <li><b style="color: #C0392B;">Tổng Item cần sản xuất:</b> {tong_item_vat_ly}</li>
                     </ul>
-                    <p>👉 <b>Link Folder Drive lưu trữ:</b> <a href="{drive_link}">{Ten_Thu_Muc_Moi}</a></p>
+                    <p>👉 <b>Link Folder Drive lưu trữ:</b> <a href="{drive_link}" style="color: #2980B9; font-weight: bold;">{Ten_Thu_Muc_Moi}</a></p>
+                    
+                    {sheet_report_html}
+                    
                     <hr>
-                    <p style="font-size: 11px; color: gray;">Email tự động tạo bởi VibeCoder Assistant.</p>
+                    <p style="font-size: 11px; color: gray;">Email tự động tạo bởi VibeCoder Assistant lúc {vntime_now.strftime('%H:%M:%S %d/%m/%Y')}.</p>
                 </body></html>
                 """
                 msg = MIMEMultipart()
@@ -277,15 +306,18 @@ if run_btn:
                 msg['Subject'] = f"[Azura Production] Batch {str_date_range} - Thư mục: {Ten_Thu_Muc_Moi}"
                 msg.attach(MIMEText(html_content, 'html'))
 
-                server = smtplib.SMTP('smtp.gmail.com', 587)
-                server.starttls()
-                server.login(Email_Nguoi_Gui, Mat_Khau_Ung_Dung.replace(" ", ""))
-                
-                all_recipients = [e.strip() for e in Email_Nhan_To.split(',') if e.strip()] + [e.strip() for e in Email_Nhan_CC.split(',') if e.strip()]
-                if all_recipients:
-                    server.sendmail(Email_Nguoi_Gui, all_recipients, msg.as_string())
-                server.quit()
-                st.write("✅ Đã gửi Email thành công!")
+                try:
+                    server = smtplib.SMTP('smtp.gmail.com', 587)
+                    server.starttls()
+                    server.login(Email_Nguoi_Gui, Mat_Khau_Ung_Dung.replace(" ", ""))
+                    
+                    all_recipients = [e.strip() for e in Email_Nhan_To.split(',') if e.strip()] + [e.strip() for e in Email_Nhan_CC.split(',') if e.strip()]
+                    if all_recipients:
+                        server.sendmail(Email_Nguoi_Gui, all_recipients, msg.as_string())
+                    server.quit()
+                    st.write("✅ Đã gửi Email thành công!")
+                except Exception as e:
+                    st.error(f"❌ Lỗi khi gửi Email: {e}")
 
             status.update(label="🎉 HOÀN TẤT QUY TRÌNH!", state="complete", expanded=False)
             st.balloons()
