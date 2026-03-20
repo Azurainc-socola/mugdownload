@@ -48,8 +48,8 @@ with st.sidebar:
 
     st.header("🛠️ Chọn Tính Năng")
     Tao_PDF_Label = st.checkbox("Tạo PDF Label", value=True)
-    Tai_Anh_Design = st.checkbox("Tải Ảnh Design lên Drive", value=False)
-    Ghi_Google_Sheet = st.checkbox("Ghi dữ liệu Google Sheet", value=False)
+    Tai_Anh_Design = st.checkbox("Tải Ảnh Design lên Drive", value=True)
+    Ghi_Google_Sheet = st.checkbox("Ghi dữ liệu Google Sheet", value=True)
     
     st.header("📧 Cấu Hình Email")
     Gui_Email = st.checkbox("Gửi Email Thông Báo", value=True)
@@ -62,7 +62,6 @@ with st.sidebar:
 PARENT_FOLDER_ID = "1stqTuzijEkaHTQd_PCXThz_tDVDm75CX"
 GOOGLE_SHEET_ID = "1WIV4otW8EvoSme7WwC9PauHc6FV8C6PxegNxt549kAk"
 
-# Hàm làm sạch tên file
 def sanitize(name):
     if not name: return "Unknown"
     return re.sub(r'[\\/*?:"<>|#]', "", str(name)).strip().replace(" ", "_")
@@ -89,13 +88,11 @@ if run_btn:
             gc = gspread.authorize(creds) if Ghi_Google_Sheet else None
             st.write("✅ Xác thực Google thành công!")
 
-            # Hàm tạo Drive Folder
             def create_drive_folder(folder_name, parent_id):
                 file_metadata = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder', 'parents': [parent_id]}
                 folder = drive_service.files().create(body=file_metadata, fields='id').execute()
                 return folder.get('id')
 
-            # Hàm Upload File
             def upload_to_drive(local_file_path, file_name, folder_id, mime_type):
                 file_metadata = {'name': file_name, 'parents': [folder_id]}
                 media = MediaFileUpload(local_file_path, mimetype=mime_type, resumable=True)
@@ -161,6 +158,8 @@ if run_btn:
                     items = o.get('orderProductDesigns') or []
                     l_url = o.get('partnerLabelUrl')
                     c_order = sanitize(o.get('customerOrder') or "")
+                    
+                    # Lấy tổng số lượng của cả đơn
                     order_qty = o.get('quantity') or 1
 
                     has_target = False
@@ -171,7 +170,14 @@ if run_btn:
                             oid = str(p.get('orderId') or o.get('id') or "NoID")
                             p_name = sanitize(p.get('productName') or (p.get('product') or {}).get('name') or "Product")
                             product_name_idx = f"{p_name}_{idx+1}"
-                            item_qty = p.get('quantity') or order_qty
+                            
+                            # --- ĐÃ FIX LOGIC TÍNH ITEM QTY ---
+                            item_qty = p.get('quantity')
+                            if not item_qty:
+                                # Nếu API không trả quantity riêng, chia đều cho tổng số design
+                                item_qty = max(1, order_qty // len(items)) if items else order_qty
+                            # -----------------------------------
+                                
                             d_url = (p.get('design') or {}).get('previewUrl') or p.get('previewUrl')
                             
                             if d_url:
@@ -239,7 +245,6 @@ if run_btn:
                 if Tai_Anh_Design:
                     st.write(f"🎉 Đã tải lên Drive: {count}/{len(design_queue)} Designs.")
 
-            # Biến lưu trữ vị trí dòng để gửi Email
             start_row = 0
             end_row = 0
             
@@ -249,7 +254,6 @@ if run_btn:
                     sh = gc.open_by_key(GOOGLE_SHEET_ID)
                     worksheet = sh.get_worksheet(0)
                     
-                    # Đếm số dòng hiện tại (dựa vào cột A)
                     current_rows = len(worksheet.col_values(1))
                     start_row = current_rows + 1
                     end_row = start_row + len(sheet_rows_to_append) - 1
@@ -268,7 +272,6 @@ if run_btn:
                 drive_link = f"https://drive.google.com/drive/folders/{TARGET_FOLDER_ID}" if TARGET_FOLDER_ID else "Không có link"
                 sheet_link = f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}/edit"
                 
-                # Báo cáo Sheet (Chỉ hiển thị nếu có ghi)
                 sheet_report_html = ""
                 if Ghi_Google_Sheet and start_row > 0:
                     sheet_report_html = f"""
