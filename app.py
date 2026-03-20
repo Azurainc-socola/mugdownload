@@ -59,7 +59,7 @@ with st.sidebar:
     run_btn = st.button("▶️ CHẠY TIẾN TRÌNH", use_container_width=True, type="primary")
 
 # Hằng số (Cố định của dự án)
-PARENT_FOLDER_ID = "1stqTuzijEkaHTQd_PCXThz_tDVDm75CX"
+PARENT_FOLDER_ID = "10ch4CQ1J3Seg50Mb7jUXlXZg8-VunOik"
 GOOGLE_SHEET_ID = "1WIV4otW8EvoSme7WwC9PauHc6FV8C6PxegNxt549kAk"
 
 def sanitize(name):
@@ -90,13 +90,22 @@ if run_btn:
 
             def create_drive_folder(folder_name, parent_id):
                 file_metadata = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder', 'parents': [parent_id]}
-                folder = drive_service.files().create(body=file_metadata, fields='id').execute()
+                folder = drive_service.files().create(
+                    body=file_metadata, 
+                    fields='id',
+                    supportsAllDrives=True
+                ).execute()
                 return folder.get('id')
 
             def upload_to_drive(local_file_path, file_name, folder_id, mime_type):
                 file_metadata = {'name': file_name, 'parents': [folder_id]}
                 media = MediaFileUpload(local_file_path, mimetype=mime_type, resumable=True)
-                drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+                drive_service.files().create(
+                    body=file_metadata, 
+                    media_body=media, 
+                    fields='id',
+                    supportsAllDrives=True
+                ).execute()
 
             st.write(f"📁 Đang tạo/chỉ định thư mục '{Ten_Thu_Muc_Moi}'...")
             TARGET_FOLDER_ID = create_drive_folder(Ten_Thu_Muc_Moi, PARENT_FOLDER_ID)
@@ -159,8 +168,15 @@ if run_btn:
                     l_url = o.get('partnerLabelUrl')
                     c_order = sanitize(o.get('customerOrder') or "")
                     
-                    # Lấy tổng số lượng của cả đơn
+                    # --- NÂNG CẤP THUẬT TOÁN CHIA ĐỀU VÀ BÙ SỐ DƯ ---
                     order_qty = o.get('quantity') or 1
+                    num_items = len(items)
+                    if num_items > 0:
+                        base_qty = order_qty // num_items
+                        remainder = order_qty % num_items
+                    else:
+                        base_qty = order_qty
+                        remainder = 0
 
                     has_target = False
                     temp_designs = []
@@ -171,12 +187,11 @@ if run_btn:
                             p_name = sanitize(p.get('productName') or (p.get('product') or {}).get('name') or "Product")
                             product_name_idx = f"{p_name}_{idx+1}"
                             
-                            # --- ĐÃ FIX LOGIC TÍNH ITEM QTY ---
+                            # Ưu tiên API, nếu API mất data thì dùng thuật toán Bù Số Dư
                             item_qty = p.get('quantity')
                             if not item_qty:
-                                # Nếu API không trả quantity riêng, chia đều cho tổng số design
-                                item_qty = max(1, order_qty // len(items)) if items else order_qty
-                            # -----------------------------------
+                                item_qty = base_qty + (1 if idx < remainder else 0)
+                                item_qty = max(1, item_qty) # Đảm bảo tối thiểu là 1
                                 
                             d_url = (p.get('design') or {}).get('previewUrl') or p.get('previewUrl')
                             
