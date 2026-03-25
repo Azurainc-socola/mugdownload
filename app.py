@@ -187,17 +187,27 @@ if run_btn:
                             p_name = sanitize(p.get('productName') or (p.get('product') or {}).get('name') or "Product")
                             product_name_idx = f"{p_name}_{idx+1}"
                             
-                            # Ưu tiên API, nếu API mất data thì dùng thuật toán Bù Số Dư
                             item_qty = p.get('quantity')
                             if not item_qty:
                                 item_qty = base_qty + (1 if idx < remainder else 0)
-                                item_qty = max(1, item_qty) # Đảm bảo tối thiểu là 1
+                                item_qty = max(1, item_qty)
                                 
                             d_url = (p.get('design') or {}).get('previewUrl') or p.get('previewUrl')
                             
+                            # LẤY MOCKUP URL TỪ API
+                            m_url = (p.get('design') or {}).get('mockupUrl') or p.get('mockupUrl') or ""
+                            
                             if d_url:
                                 fname = f"{oid}_{c_order}_{product_name_idx}-{item_qty}item.png"
-                                temp_designs.append({"url": d_url, "fname": fname, "oid": oid, "c_order": c_order, "product_name_idx": product_name_idx, "qty": item_qty})
+                                temp_designs.append({
+                                    "url": d_url, 
+                                    "fname": fname, 
+                                    "oid": oid, 
+                                    "c_order": c_order, 
+                                    "product_name_idx": product_name_idx, 
+                                    "qty": item_qty,
+                                    "mockupUrl": m_url # Đưa mockupUrl vào data chuẩn bị xuất
+                                })
 
                     if has_target and l_url:
                         if l_url not in seen_labels:
@@ -255,7 +265,18 @@ if run_btn:
 
                     if Ghi_Google_Sheet and upload_success:
                         portal_link = f"https://portal.aluffm.com/OnBehalfOrder?searchText={item['c_order']}"
-                        sheet_rows_to_append.append([Ten_Thu_Muc_Moi, item["oid"], item["c_order"], item["url"], item["product_name_idx"], item["qty"], portal_link])
+                        
+                        # CẬP NHẬT SHEET ROW: Bổ sung item["mockupUrl"] vào cuối mảng để tương ứng Cột H
+                        sheet_rows_to_append.append([
+                            Ten_Thu_Muc_Moi,            # Cột A
+                            item["oid"],                # Cột B
+                            item["c_order"],            # Cột C
+                            item["url"],                # Cột D (Design/Preview)
+                            item["product_name_idx"],   # Cột E
+                            item["qty"],                # Cột F
+                            portal_link,                # Cột G
+                            item["mockupUrl"]           # Cột H (Mockup URL mới được thêm vào)
+                        ])
 
                 if Tai_Anh_Design:
                     st.write(f"🎉 Đã tải lên Drive: {count}/{len(design_queue)} Designs.")
