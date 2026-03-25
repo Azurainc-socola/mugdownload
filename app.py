@@ -60,7 +60,8 @@ with st.sidebar:
 
 # Hằng số (Cố định của dự án)
 PARENT_FOLDER_ID = "10ch4CQ1J3Seg50Mb7jUXlXZg8-VunOik"
-GOOGLE_SHEET_ID = "1vTzTw217QkLjTyFaejvuVG2i9o3FrDXUe1gyvvQnx9M"
+# ===== ĐÃ CẬP NHẬT SHEET ID MỚI Ở ĐÂY =====
+GOOGLE_SHEET_ID = "1vTzTw217QkLjTyFaejvuVG2i9o3FrDXUe1gyvvQnx9M" 
 
 def sanitize(name):
     if not name: return "Unknown"
@@ -168,7 +169,6 @@ if run_btn:
                     l_url = o.get('partnerLabelUrl')
                     c_order = sanitize(o.get('customerOrder') or "")
                     
-                    # --- NÂNG CẤP THUẬT TOÁN CHIA ĐỀU VÀ BÙ SỐ DƯ ---
                     order_qty = o.get('quantity') or 1
                     num_items = len(items)
                     if num_items > 0:
@@ -193,8 +193,6 @@ if run_btn:
                                 item_qty = max(1, item_qty)
                                 
                             d_url = (p.get('design') or {}).get('previewUrl') or p.get('previewUrl')
-                            
-                            # LẤY MOCKUP URL TỪ API
                             m_url = (p.get('design') or {}).get('mockupUrl') or p.get('mockupUrl') or ""
                             
                             if d_url:
@@ -206,7 +204,7 @@ if run_btn:
                                     "c_order": c_order, 
                                     "product_name_idx": product_name_idx, 
                                     "qty": item_qty,
-                                    "mockupUrl": m_url # Đưa mockupUrl vào data chuẩn bị xuất
+                                    "mockupUrl": m_url 
                                 })
 
                     if has_target and l_url:
@@ -263,10 +261,11 @@ if run_btn:
                     else:
                         upload_success = True
 
-                    if Ghi_Google_Sheet and upload_success:
+                    # CẬP NHẬT LOGIC VÁ LỖI MẤT DỮ LIỆU
+                    if Ghi_Google_Sheet:
                         portal_link = f"https://portal.aluffm.com/OnBehalfOrder?searchText={item['c_order']}"
+                        upload_status = "OK" if upload_success else "Lỗi tải ảnh"
                         
-                        # CẬP NHẬT SHEET ROW: Bổ sung item["mockupUrl"] vào cuối mảng để tương ứng Cột H
                         sheet_rows_to_append.append([
                             Ten_Thu_Muc_Moi,            # Cột A
                             item["oid"],                # Cột B
@@ -275,7 +274,8 @@ if run_btn:
                             item["product_name_idx"],   # Cột E
                             item["qty"],                # Cột F
                             portal_link,                # Cột G
-                            item["mockupUrl"]           # Cột H (Mockup URL mới được thêm vào)
+                            item["mockupUrl"],          # Cột H 
+                            upload_status               # Cột I (Trạng thái đẩy Drive)
                         ])
 
                 if Tai_Anh_Design:
