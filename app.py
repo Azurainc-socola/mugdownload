@@ -60,7 +60,7 @@ with st.sidebar:
 
 # Hằng số (Cố định của dự án)
 PARENT_FOLDER_ID = "10ch4CQ1J3Seg50Mb7jUXlXZg8-VunOik"
-GOOGLE_SHEET_ID = "1WIV4otW8EvoSme7WwC9PauHc6FV8C6PxegNxt549kAk"
+GOOGLE_SHEET_ID = "1vTzTw217QkLjTyFaejvuVG2i9o3FrDXUe1gyvvQnx9M"
 
 def sanitize(name):
     if not name: return "Unknown"
